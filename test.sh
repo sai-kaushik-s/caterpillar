@@ -110,3 +110,18 @@ if [ $? -ne 0 ]; then
 else
     echo -e "${GREEN}Execution completed successfully!${NC}"
 fi
+
+base_filename=$(basename "$1")
+qpic_directory="output/${base_filename%.*}/"
+cd $qpic_directory
+qpic_file="quantum_circuit.qpic"
+
+# Check if QPic file exists, if exists convert to pdf
+if [ -f "$qpic_file" ]; then
+    echo -e "${BLUE}Converting QPic to PDF...${NC}"
+    qpic -f pdf $qpic_file -o quantum_circuit.pdf
+    echo -e "${GREEN}Conversion completed successfully!${NC}"
+else
+    echo -e "${RED}Error: QPic file not found at $qpic_file${NC}"
+    exit 1
+fi

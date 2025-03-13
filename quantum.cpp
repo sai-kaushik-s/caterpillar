@@ -1,22 +1,25 @@
-#include <caterpillar/synthesis/strategies/mapping_strategy.hpp>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <filesystem>
+
+#include <mockturtle/mockturtle.hpp>
+#include <lorina/lorina.hpp>
+#include <caterpillar/caterpillar.hpp>
 #include <caterpillar/synthesis/strategies/bennett_mapping_strategy.hpp>
 #include <caterpillar/synthesis/strategies/pebbling_mapping_strategy.hpp>
 #include <caterpillar/synthesis/strategies/eager_mapping_strategy.hpp>
+#include <caterpillar/synthesis/decompose_with_ands.hpp>
 #include <mockturtle/algorithms/xag_optimization.hpp>
 #include <mockturtle/io/verilog_reader.hpp>
 #include <mockturtle/networks/xag.hpp>
-#include <mockturtle/mockturtle.hpp>
-#include <lorina/lorina.hpp>
 #include <tweedledum/tweedledum.hpp>
-#include <caterpillar/caterpillar.hpp>
+#include <tweedledum/io/write_qpic.hpp>
 #include <tweedledum/networks/netlist.hpp>
 #include <caterpillar/solvers/bsat_solver.hpp>
-#include <fstream>
-#include <string>
-#include <iostream>
 
 void print_usage(const char* prog_name);
-void write_gate_types(caterpillar::stg_gate gate, std::ofstream& gate_output);
+void write_gate_types(tweedledum::mcmt_gate gate, std::ofstream& gate_output);
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -48,7 +51,6 @@ int main(int argc, char** argv) {
     // Read the Verilog file and create an XAG network
     mockturtle::xag_network xag;
     lorina::return_code result = lorina::read_verilog(input_file, mockturtle::verilog_reader(xag));
-    xag_constant_fanin_optimization( xag );
     
     if (result != lorina::return_code::success) {
         std::cerr << "Failed to read Verilog file: " << input_file << std::endl;
@@ -74,7 +76,7 @@ int main(int argc, char** argv) {
     }
 
     // Create a quantum circuit
-    tweedledum::netlist<caterpillar::stg_gate> circuit;
+    tweedledum::netlist<caterpillar::stg_gate> reversible_circuit;
 
     // Select mapping strategy based on command-line option
     if (strategy_name == "pebbling") {
@@ -83,44 +85,52 @@ int main(int argc, char** argv) {
             caterpillar::bsat_pebble_solver<mockturtle::xag_network>
         > strategy;
         
-        caterpillar::logic_network_synthesis(circuit, xag, strategy);
+        caterpillar::logic_network_synthesis(reversible_circuit, xag, strategy);
     } 
     else if (strategy_name == "bennett") {
         caterpillar::bennett_mapping_strategy<mockturtle::xag_network> strategy;
-        caterpillar::logic_network_synthesis(circuit, xag, strategy);
+        caterpillar::logic_network_synthesis(reversible_circuit, xag, strategy);
     } 
     else if (strategy_name == "eager") {
         caterpillar::eager_mapping_strategy<mockturtle::xag_network> strategy;
-        caterpillar::logic_network_synthesis(circuit, xag, strategy);
+        caterpillar::logic_network_synthesis(reversible_circuit, xag, strategy);
     } 
     else {
         std::cerr << "Unknown strategy: " << strategy_name << std::endl;
         print_usage(argv[0]);
         return 1;
     }
-
-    int t_count = 0;
-    std::ofstream gate_output("quantum_circuit_analysis.txt");
     
+    // Convert the reversible circuit to a quantum circuit
+    tweedledum::netlist<tweedledum::mcmt_gate> quantum_circuit;
+    caterpillar::decompose_with_ands(quantum_circuit, reversible_circuit);
+
     // Analyze the circuit
-    circuit.foreach_cgate([&](auto const& gate) {
-        write_gate_types(gate.gate, gate_output);
+    int t_count = 0;
+    quantum_circuit.foreach_cgate([&](auto const& gate) {
         if (gate.gate.operation() == tweedledum::gate_set::t)
             t_count++;
     });
-    
-    gate_output.close();
 
+    // Write the quantum circuit to a file
+    std::filesystem::path input_path(input_file);
+    std::string output_dir = "output/" + input_path.stem().string() + "/";
+    std::filesystem::create_directories(output_dir);
+    std::ofstream qpic_output(output_dir + "quantum_circuit.qpic");
+    tweedledum::write_qpic(quantum_circuit, qpic_output);
+    qpic_output.close();
+
+    // Stats of the quantum circuit
     std::cout << "Quantum circuit statistics:"
-              << "\nQubits: " << circuit.num_qubits()
-              << "\nTotal gates: " << circuit.num_gates() 
+              << "\nQubits: " << quantum_circuit.num_qubits()
+              << "\nTotal gates: " << quantum_circuit.num_gates() 
               << "\nT-count: " << t_count
               << std::endl;
 
     return 0;
 }
 
-void write_gate_types(caterpillar::stg_gate gate, std::ofstream& gate_output) {
+void write_gate_types(tweedledum::mcmt_gate gate, std::ofstream& gate_output) {
 
     switch (gate.operation()) {
         case tweedledum::gate_set::t:
